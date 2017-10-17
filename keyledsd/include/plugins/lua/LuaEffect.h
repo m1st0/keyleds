@@ -19,35 +19,41 @@
 
 #include <memory>
 #include "keyledsd/effect/PluginHelper.h"
-#include "plugins/lua/State.h"
+
+struct lua_State;
+
+namespace std {
+    template <> struct default_delete<lua_State> { void operator()(lua_State *) const; };
+}
+
 
 namespace keyleds { namespace plugin { namespace lua {
 
 /****************************************************************************/
 
-class LuaEffect : public ::plugin::Effect
+class LuaEffect final : public ::plugin::Effect
 {
-    using Container = State::Container;
+    using state_ptr = std::unique_ptr<lua_State>;
 public:
-                    LuaEffect(std::string name, EffectService &, Container);
+                    LuaEffect(std::string name, EffectService &, state_ptr);
                     LuaEffect(const LuaEffect &) = delete;
                     ~LuaEffect();
 
     static std::unique_ptr<LuaEffect> create(const std::string & name, EffectService &,
-                                             const std::string & code, Container);
+                                             const std::string & code);
 
     void            render(unsigned long ms, RenderTarget & target) override;
     void            handleContextChange(const string_map &) override;
     void            handleGenericEvent(const string_map &) override;
     void            handleKeyEvent(const KeyDatabase::Key &, bool) override;
 private:
-    static void     setupContainer(Container &, EffectService &);
-    bool            pushHook(lua_State *, const char *);
+    static void     setupState(lua_State *, EffectService &);
+    static bool     pushHook(lua_State *, const char *);
     static bool     handleError(lua_State *, EffectService &, int code);
 private:
     std::string     m_name;         ///< Name of the effect, from config file
     EffectService & m_service;      ///< For communicating with keyleds
-    Container       m_container;    ///< Lua container this effect's scripts runs in
+    state_ptr       m_state;        ///< Lua container this effect's scripts runs in
     bool            m_enabled;      ///< Should render/event handlers be run?
 };
 

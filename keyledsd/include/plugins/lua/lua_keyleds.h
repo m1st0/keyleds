@@ -17,9 +17,11 @@
 #ifndef KEYLEDS_PLUGINS_LUA_TYPES_H_3EAF7EA0
 #define KEYLEDS_PLUGINS_LUA_TYPES_H_3EAF7EA0
 
-#include "lua.hpp"
 #include "plugins/lua/types.h"
 #include "keyledsd/device/KeyDatabase.h"
+
+struct luaL_reg;
+struct lua_State;
 
 namespace keyleds { namespace device { class RenderTarget; } }
 
@@ -28,13 +30,13 @@ namespace keyleds { namespace plugin { namespace lua {
 /****************************************************************************/
 
 template <> struct metatable<const device::KeyDatabase *>
-    { static const char * name; static const struct luaL_reg methods[]; };
+    { static const char * name; static const struct luaL_reg methods[]; struct weak_table : std::false_type{}; };
 template <> struct metatable<const device::KeyDatabase::KeyGroup *>
-    { static const char * name; static const struct luaL_reg methods[]; };
+    { static const char * name; static const struct luaL_reg methods[]; struct weak_table : std::true_type{}; };
 template <> struct metatable<const device::KeyDatabase::Key *>
-    { static const char * name; static const struct luaL_reg methods[]; };
+    { static const char * name; static const struct luaL_reg methods[]; struct weak_table : std::true_type{}; };
 template <> struct metatable<device::RenderTarget *>
-    { static const char * name; static const struct luaL_reg methods[]; };
+    { static const char * name; static const struct luaL_reg methods[]; struct weak_table : std::false_type{}; };
 
 extern const void * const serviceToken; ///< lightuserdata indexing EffectService in globals
 

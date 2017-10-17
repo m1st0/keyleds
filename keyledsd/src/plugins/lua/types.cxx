@@ -33,7 +33,7 @@ namespace keyleds { namespace plugin { namespace lua {
 
 /****************************************************************************/
 
-void registerType(lua_State * lua, const char * name, const luaL_reg * methods)
+void registerType(lua_State * lua, const char * name, const luaL_reg * methods, bool weakTable)
 {
     assert(lua);
     assert(name);
@@ -42,10 +42,24 @@ void registerType(lua_State * lua, const char * name, const luaL_reg * methods)
     SAVE_TOP(lua);
     luaL_newmetatable(lua, name);
     luaL_register(lua, nullptr, methods);
+
+    // metatable["__metatable"] = nil   -- makes metatable invisible to lua
     lua_pushnil(lua);
     lua_setfield(lua, -2, "__metatable");
+
     lua_pop(lua, 1);
     CHECK_TOP(lua, 0);
+
+    if (weakTable) {
+        lua_pushlightuserdata(lua, const_cast<luaL_Reg *>(methods));
+        lua_newtable(lua);              // push(weaktable)
+        lua_createtable(lua, 0, 1);     // push(metatable)
+        lua_pushliteral(lua, "v");      // push("v")
+        lua_setfield(lua, -2, "mode");  // pop("v")
+        lua_setmetatable(lua, -2);      // pop(metatable)
+        lua_rawset(lua, LUA_REGISTRYINDEX);
+        CHECK_TOP(lua, 0);
+    }
 }
 
 bool isType(lua_State * lua, int index, const char * name)
@@ -61,6 +75,29 @@ bool isType(lua_State * lua, int index, const char * name)
     CHECK_TOP(lua, 0);
 
     return result;
+}
+
+void lua_pushref(lua_State * lua, const void * value, const char * name, const luaL_reg * metaMethods)
+{
+    lua_pushlightuserdata(lua, const_cast<luaL_reg *>(metaMethods));
+    lua_rawget(lua, LUA_REGISTRYINDEX);
+    lua_pushlightuserdata(lua, const_cast<void *>(value));
+    lua_rawget(lua, -2);
+
+    const void ** ptr = const_cast<const void **>(static_cast<const void * const *>(lua_topointer(lua, -1)));
+    if (!ptr) {
+        lua_pop(lua, 1);
+
+        ptr = static_cast<const void **>(lua_newuserdata(lua, sizeof(void *)));
+        *ptr = value;
+        luaL_getmetatable(lua, name);
+        lua_setmetatable(lua, -2);
+
+        lua_pushlightuserdata(lua, const_cast<void *>(value));
+        lua_pushvalue(lua, -2);
+        lua_rawset(lua, -4);
+    }
+    lua_remove(lua, -2);
 }
 
 } } } // namespace keyleds::plugin::lua

@@ -27,27 +27,6 @@ using keyleds::plugin::lua::LuaEffect;
 
 /****************************************************************************/
 
-static constexpr std::array<lua_CFunction, 5> loadModules = {{
-    luaopen_base, luaopen_math, luaopen_string, luaopen_table,
-    keyleds::plugin::lua::open_keyleds
-}};
-static_assert(loadModules.back() == keyleds::plugin::lua::open_keyleds,
-              "unexpected last element, is size correct?");
-
-static constexpr std::array<const char *, 25> globalWhitelist = {{
-    // Libraries
-    "coroutine", "keyleds", "math", "string",
-    "table",
-    // Functions
-    "assert", "error", "ipairs", "next",
-    "pairs", "pcall", "print", "rawequal",
-    "rawget", "rawset", "select", "setmetatable",
-    "tocolor", "tonumber", "tostring", "type",
-    "unpack", "xpcall",
-    // Values
-    "_G", "_VERSION"
-}};
-
 #ifndef NDEBUG
 #define SAVE_TOP(lua)   int saved_top_ = lua_gettop(lua)
 #define CHECK_TOP(lua, depth)   assert(lua_gettop(lua) == saved_top_ + depth)
@@ -57,7 +36,43 @@ static constexpr std::array<const char *, 25> globalWhitelist = {{
 #endif
 
 /****************************************************************************/
+// Constants defining LUA environment
 
+// LUA libraries to load
+static constexpr std::array<lua_CFunction, 5> loadModules = {{
+    luaopen_base, luaopen_math, luaopen_string, luaopen_table,
+    keyleds::plugin::lua::open_keyleds
+}};
+static_assert(loadModules.back() == keyleds::plugin::lua::open_keyleds,
+              "unexpected last element, is size correct?");
+
+// Symbols not in this list get removed once libraries are loaded
+static constexpr std::array<const char *, 26> globalWhitelist = {{
+    // Libraries
+    "coroutine", "keyleds", "math", "string",
+    "table",
+    // Functions
+    "assert", "error", "getmetatable", "ipairs",
+    "next", "pairs", "pcall", "print",
+    "rawequal", "rawget", "rawset", "select",
+    "setmetatable", "tocolor", "tonumber", "tostring",
+    "type", "unpack", "xpcall",
+    // Values
+    "_G", "_VERSION"
+}};
+
+/****************************************************************************/
+// Helper functions
+
+// Ensure unique_ptr works on lua_State
+namespace std {
+    void default_delete<lua_State>::operator()(lua_State *p) const { lua_close(p); }
+}
+
+/// Convert a lua panic into abort - gives better messages than letting lua exit().
+static int luaPanicHandler(lua_State *) { abort(); }
+
+/// Builds the error message for script errors
 static int errorHandler(lua_State * lua)
 {
     std::ostringstream buffer;
@@ -92,20 +107,25 @@ static int errorHandler(lua_State * lua)
 }
 
 /****************************************************************************/
+// Lifecycle management
 
-LuaEffect::LuaEffect(std::string name, EffectService & service, Container container)
+LuaEffect::LuaEffect(std::string name, EffectService & service, state_ptr state)
  : m_name(std::move(name)),
    m_service(service),
-   m_container(std::move(container)),
+   m_state(std::move(state)),
    m_enabled(true)
 {}
 
 LuaEffect::~LuaEffect() {}
 
 std::unique_ptr<LuaEffect> LuaEffect::create(const std::string & name, EffectService & service,
-                                             const std::string & code, Container container)
+                                             const std::string & code)
 {
-    auto * lua = container.lua();
+    // Create a LUA state
+    state_ptr state(luaL_newstate());
+    auto * lua = state.get();
+    lua_atpanic(lua, luaPanicHandler);
+
     SAVE_TOP(lua);
 
     // Load script
@@ -114,113 +134,24 @@ std::unique_ptr<LuaEffect> LuaEffect::create(const std::string & name, EffectSer
         lua_pop(lua, 1);                    // pop error message
         CHECK_TOP(lua, 0);
         return nullptr;
-    }
-                                            // ^push (script)
+    }                                       // ^push (script)
 
-    setupContainer(container, service);
+    setupState(lua, service);
 
+    // Run script to let it build its environment
     lua_pushcfunction(lua, errorHandler);   // push (errhandler)
     lua_insert(lua, -2);                    // swap (script, errhandler) => (errhandler, script)
     bool ok = handleError(lua, service, lua_pcall(lua, 0, 0, -2)); // pop (errhandler, script)
-    CHECK_TOP(lua, 0);
 
-    if (!ok) { return nullptr; }
-    return std::make_unique<LuaEffect>(name, service, std::move(container));
+    CHECK_TOP(lua, 0);
+    return ok ? std::make_unique<LuaEffect>(name, service, std::move(state)) : nullptr;
 }
 
-void LuaEffect::render(unsigned long ms, RenderTarget & target)
+void LuaEffect::setupState(lua_State * lua, EffectService & service)
 {
-    if (!m_enabled) { return; }
-    auto lua = m_container.lua();
-    SAVE_TOP(lua);
-    lua_push(lua, &target);                         // push(rendertarget)
-
-    lua_pushcfunction(lua, errorHandler);           // push(errhandler)
-    if (pushHook(lua, "render")) {                  // push(render)
-        lua_pushinteger(lua, ms);                   // push(arg1)
-        lua_pushvalue(lua, -4);                     // push(arg2)
-        if (!handleError(lua, m_service,
-                         lua_pcall(lua, 2, 0, -4))) {// pop(errhandler, render, arg1, arg2)
-            m_enabled = false;
-        }
-    } else {
-        lua_pop(lua, 1);                            // pop(errhandler)
-    }
-
-    lua_to<RenderTarget *>(lua, -1) = nullptr;      // mark target as gone
-    lua_pop(lua, 1);
-    CHECK_TOP(lua, 0);
-}
-
-void LuaEffect::handleContextChange(const string_map & data)
-{
-    if (!m_enabled) { return; }
-    auto lua = m_container.lua();
-    SAVE_TOP(lua);
-    lua_pushcfunction(lua, errorHandler);           // push(errhandler)
-    if (pushHook(lua, "onContextChange")) {         // push(hook)
-        lua_createtable(lua, 0, data.size());       // push table
-        for (const auto & item : data) {
-            lua_pushlstring(lua, item.first.c_str(), item.first.size());
-            lua_pushlstring(lua, item.second.c_str(), item.second.size());
-            lua_rawset(lua, -3);
-        }
-        if (!handleError(lua, m_service, lua_pcall(lua, 1, 0, -3))) { // pop(errhandler, hook, table)
-            m_enabled = false;
-        }
-    } else {
-        lua_pop(lua, 1);                            // pop(errhandler)
-    }
-    CHECK_TOP(lua, 0);
-}
-
-void LuaEffect::handleGenericEvent(const string_map & data)
-{
-    if (!m_enabled) { return; }
-    auto lua = m_container.lua();
-    SAVE_TOP(lua);
-    lua_pushcfunction(lua, errorHandler);           // push(errhandler)
-    if (pushHook(lua, "onGenericEvent")) {          // push(hook)
-        lua_createtable(lua, 0, data.size());       // push table
-        for (const auto & item : data) {
-            lua_pushlstring(lua, item.first.c_str(), item.first.size());
-            lua_pushlstring(lua, item.second.c_str(), item.second.size());
-            lua_rawset(lua, -3);
-        }
-        if (!handleError(lua, m_service, lua_pcall(lua, 1, 0, -3))) { // pop(errhandler, hook, table)
-            m_enabled = false;
-        }
-    } else {
-        lua_pop(lua, 1);                            // pop(errhandler)
-    }
-    CHECK_TOP(lua, 0);
-}
-
-void LuaEffect::handleKeyEvent(const KeyDatabase::Key & key, bool press)
-{
-    if (!m_enabled) { return; }
-    auto lua = m_container.lua();
-    SAVE_TOP(lua);
-    lua_pushcfunction(lua, errorHandler);           // push(errhandler)
-    if (pushHook(lua, "onKeyEvent")) {              // push(hook)
-        lua_push(lua, &key);                        // push(arg1)
-        lua_pushboolean(lua, press);                // push(arg2)
-        if (!handleError(lua, m_service,
-                         lua_pcall(lua, 2, 0, -4))) {// pop(errhandler, hook, arg1, arg2)
-            m_enabled = false;
-        }
-    } else {
-        lua_pop(lua, 1);                            // pop(errhandler)
-    }
-    CHECK_TOP(lua, 0);
-}
-
-void LuaEffect::setupContainer(Container & container, EffectService & service)
-{
-    auto * lua = container.lua();
     SAVE_TOP(lua);
 
-    // Register libraries
+    // Load libraries in default environment
     for (const auto & module : loadModules) {
         lua_pushcfunction(lua, module);
         lua_call(lua, 0, 0);
@@ -287,6 +218,99 @@ void LuaEffect::setupContainer(Container & container, EffectService & service)
 
     CHECK_TOP(lua, 0);
 }
+
+/****************************************************************************/
+// Hooks
+
+void LuaEffect::render(unsigned long ms, RenderTarget & target)
+{
+    if (!m_enabled) { return; }
+    auto lua = m_state.get();
+    SAVE_TOP(lua);
+    lua_push(lua, &target);                         // push(rendertarget)
+
+    lua_pushcfunction(lua, errorHandler);           // push(errhandler)
+    if (pushHook(lua, "render")) {                  // push(render)
+        lua_pushinteger(lua, ms);                   // push(arg1)
+        lua_pushvalue(lua, -4);                     // push(arg2)
+        if (!handleError(lua, m_service,
+                         lua_pcall(lua, 2, 0, -4))) {// pop(errhandler, render, arg1, arg2)
+            m_enabled = false;
+        }
+    } else {
+        lua_pop(lua, 1);                            // pop(errhandler)
+    }
+
+    lua_to<RenderTarget *>(lua, -1) = nullptr;      // mark target as gone
+    lua_pop(lua, 1);
+    CHECK_TOP(lua, 0);
+}
+
+void LuaEffect::handleContextChange(const string_map & data)
+{
+    if (!m_enabled) { return; }
+    auto lua = m_state.get();
+    SAVE_TOP(lua);
+    lua_pushcfunction(lua, errorHandler);           // push(errhandler)
+    if (pushHook(lua, "onContextChange")) {         // push(hook)
+        lua_createtable(lua, 0, data.size());       // push table
+        for (const auto & item : data) {
+            lua_pushlstring(lua, item.first.c_str(), item.first.size());
+            lua_pushlstring(lua, item.second.c_str(), item.second.size());
+            lua_rawset(lua, -3);
+        }
+        if (!handleError(lua, m_service, lua_pcall(lua, 1, 0, -3))) { // pop(errhandler, hook, table)
+            m_enabled = false;
+        }
+    } else {
+        lua_pop(lua, 1);                            // pop(errhandler)
+    }
+    CHECK_TOP(lua, 0);
+}
+
+void LuaEffect::handleGenericEvent(const string_map & data)
+{
+    if (!m_enabled) { return; }
+    auto lua = m_state.get();
+    SAVE_TOP(lua);
+    lua_pushcfunction(lua, errorHandler);           // push(errhandler)
+    if (pushHook(lua, "onGenericEvent")) {          // push(hook)
+        lua_createtable(lua, 0, data.size());       // push table
+        for (const auto & item : data) {
+            lua_pushlstring(lua, item.first.c_str(), item.first.size());
+            lua_pushlstring(lua, item.second.c_str(), item.second.size());
+            lua_rawset(lua, -3);
+        }
+        if (!handleError(lua, m_service, lua_pcall(lua, 1, 0, -3))) { // pop(errhandler, hook, table)
+            m_enabled = false;
+        }
+    } else {
+        lua_pop(lua, 1);                            // pop(errhandler)
+    }
+    CHECK_TOP(lua, 0);
+}
+
+void LuaEffect::handleKeyEvent(const KeyDatabase::Key & key, bool press)
+{
+    if (!m_enabled) { return; }
+    auto lua = m_state.get();
+    SAVE_TOP(lua);
+    lua_pushcfunction(lua, errorHandler);           // push(errhandler)
+    if (pushHook(lua, "onKeyEvent")) {              // push(hook)
+        lua_push(lua, &key);                        // push(arg1)
+        lua_pushboolean(lua, press);                // push(arg2)
+        if (!handleError(lua, m_service,
+                         lua_pcall(lua, 2, 0, -4))) {// pop(errhandler, hook, arg1, arg2)
+            m_enabled = false;
+        }
+    } else {
+        lua_pop(lua, 1);                            // pop(errhandler)
+    }
+    CHECK_TOP(lua, 0);
+}
+
+/****************************************************************************/
+// Static Helper methods
 
 bool LuaEffect::pushHook(lua_State * lua, const char * name)
 {

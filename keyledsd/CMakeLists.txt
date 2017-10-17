@@ -176,7 +176,6 @@ pkg_search_module(LUA luajit lua-5.3 lua-5.2 lua-5.1)
 IF(LUA_FOUND)
     add_library(fx_lua MODULE
         src/plugins/lua/LuaEffect.cxx
-        src/plugins/lua/State.cxx
         src/plugins/lua/lua_keyleds.cxx
         src/plugins/lua/types.cxx
         src/plugins/lua.cxx

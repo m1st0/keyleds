@@ -17,7 +17,6 @@
 #include "plugins/lua/lua_keyleds.h"
 
 #include <lua.hpp>
-#include <cassert>
 #include <cstring>
 #include <iomanip>
 #include <sstream>
@@ -336,7 +335,6 @@ const struct luaL_Reg metatable<const KeyDatabase::Key *>::methods[] = {
     { nullptr,      nullptr}
 };
 
-
 /****************************************************************************/
 // RenderTarget
 
@@ -402,7 +400,6 @@ public:
         lua_pushlightuserdata(lua, service);
         lua_rawset(lua, -3);
         lua_setfenv(lua, -2);
-
         return 1;
     }
 
@@ -605,7 +602,7 @@ int open_keyleds(lua_State * lua)
     registerType<const KeyDatabase::KeyGroup *>(lua);
     registerType<const KeyDatabase::Key *>(lua);
     registerType<RenderTarget *>(lua);
-    registerType(lua, rgbaColorMetatableName, rgbaColorMetatableMethods);
+    registerType(lua, rgbaColorMetatableName, rgbaColorMetatableMethods, false);
 
     // Register library itself
     luaL_register(lua, "keyleds", keyledsLibrary);

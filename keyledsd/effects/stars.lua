@@ -36,16 +36,17 @@ end
 -- Effect rendering
 
 function render(ms, target)
-    local idx, star
+    local idx, star, duration
+    duration = config.duration
     for idx, star in ipairs(stars) do
         star.age = star.age + ms
-        if star.age >= config.duration then
+        if star.age >= duration then
             buffer[star.key] = transparent
             star:rebirth()
         end
         buffer[star.key] = tocolor(
             star.color.red, star.color.green, star.color.blue,
-            star.color.alpha * (config.duration - star.age) / config.duration
+            star.color.alpha * (duration - star.age) / duration
         )
     end
     target:blend(buffer)

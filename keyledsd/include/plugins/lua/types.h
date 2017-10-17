@@ -27,14 +27,17 @@ namespace keyleds { namespace plugin { namespace lua {
 
 template <typename T> struct metatable {};
 
-void registerType(lua_State *, const char * name, const luaL_reg * metaMethods);
+void registerType(lua_State *, const char * name, const luaL_reg * metaMethods, bool weakTable);
 bool isType(lua_State * lua, int index, const char * type);
+void lua_pushref(lua_State * lua, const void * value, const char * name, const luaL_reg * metaMethods);
 
 /// Registers the metatable with lua
 template <typename T> void registerType(lua_State * lua)
 {
     using meta = metatable<typename std::remove_cv<T>::type>;
-    registerType(lua, meta::name, meta::methods);
+    static_assert(std::is_pointer<T>::value || !meta::weak_table::value,
+                  "Using a weak table requires stored object to be a pointer");
+    registerType(lua, meta::name, meta::methods, meta::weak_table::value);
 }
 
 /// Tests whether value at index is of specified type
@@ -59,7 +62,8 @@ template <typename T> T & lua_to(lua_State * lua, int index)
 
 /// Pushes an object into a userdata, on the stack
 template <typename T>
-typename std::enable_if<std::is_copy_constructible<T>::value &&
+typename std::enable_if<!metatable<typename std::remove_cv<T>::type>::weak_table::value &&
+                        std::is_copy_constructible<T>::value &&
                         !std::is_reference<T>::value>::type
 lua_push(lua_State * lua, const T & value)
 {
@@ -71,7 +75,8 @@ lua_push(lua_State * lua, const T & value)
 }
 
 template <typename T>
-typename std::enable_if<std::is_move_constructible<T>::value &&
+typename std::enable_if<!metatable<typename std::remove_cv<T>::type>::weak_table::value &&
+                        std::is_move_constructible<T>::value &&
                         !std::is_reference<T>::value>::type
 lua_push(lua_State * lua, T && value)
 {
@@ -82,16 +87,13 @@ lua_push(lua_State * lua, T && value)
     lua_setmetatable(lua, -2);
 }
 
-/// Emplaces an object directly into a userdata, on the stack
-template <typename T, typename... Args>
-typename std::enable_if<std::is_constructible<T, Args...>::value>::type
-lua_emplace(lua_State * lua, Args &&... args)
+template <typename T>
+typename std::enable_if<metatable<typename std::remove_cv<T>::type>::weak_table::value &&
+                        !std::is_reference<T>::value>::type
+lua_push(lua_State * lua, T value)
 {
     using meta = metatable<typename std::remove_cv<T>::type>;
-    void * ptr = lua_newuserdata(lua, sizeof(T));
-    new (ptr) T(std::forward<Args>(args)...);
-    luaL_getmetatable(lua, meta::name);
-    lua_setmetatable(lua, -2);
+    lua_pushref(lua, static_cast<const void *>(value), meta::name, meta::methods);
 }
 
 /****************************************************************************/

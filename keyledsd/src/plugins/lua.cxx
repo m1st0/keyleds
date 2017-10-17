@@ -16,13 +16,11 @@
  */
 #include <cassert>
 #include <memory>
-#include <fstream>
 #include <vector>
 #include "keyledsd/effect/PluginHelper.h"
 #include "plugins/lua/LuaEffect.h"
-#include "plugins/lua/State.h"
 
-using namespace keyleds::plugin::lua;
+using keyleds::plugin::lua::LuaEffect;
 
 
 class LuaPlugin final : public keyleds::effect::interface::Plugin
@@ -30,9 +28,7 @@ class LuaPlugin final : public keyleds::effect::interface::Plugin
     using EffectService = keyleds::effect::interface::EffectService;
 
     struct StateInfo {
-        std::string                             serial;
-        std::unique_ptr<State>                  state;
-        std::vector<std::unique_ptr<LuaEffect>> effects;
+        std::unique_ptr<LuaEffect>  effect;
     };
     using state_list = std::vector<StateInfo>;
 
@@ -41,60 +37,36 @@ public:
 
     ~LuaPlugin() {}
 
-    auto stateInfoFor(const std::string & serial)
-    {
-        auto it = std::find_if(
-            m_states.begin(), m_states.end(),
-            [&serial](const auto & info) { return info.serial == serial; }
-        );
-        if (it != m_states.end()) { return it; }
-
-        m_states.emplace_back(StateInfo{serial, std::make_unique<State>(), {}});
-        return m_states.end() - 1;
-    }
-
     keyleds::effect::interface::Effect *
     createEffect(const std::string & name, EffectService & service) override
     {
         auto source = service.getFile("effects/" + name + ".lua");
         if (source.empty()) { return nullptr; }
 
-        auto info = stateInfoFor(service.deviceSerial());
-
-        std::unique_ptr<LuaEffect> effect;
+        StateInfo info;
         try {
-            effect = LuaEffect::create(name, service, source, info->state->createContainer());
-        } catch (...) {
-            assert(false);      // TODO more sensible handling?
+            info.effect = LuaEffect::create(name, service, source);
+        } catch (std::exception & err) {
+            service.log(2, err.what());
+            return nullptr;
         }
 
         service.getFile({});    // let the service clear file data
 
-        if (!effect) {
-            if (info->effects.empty()) { m_states.erase(info); }
-            return nullptr;
-        }
+        if (!info.effect) { return nullptr; }
 
-        keyleds::effect::interface::Effect * ptr = effect.get();
-        info->effects.push_back(std::move(effect));
-        return ptr;
+        m_states.push_back(std::move(info));
+        return m_states.back().effect.get();
     }
 
-    void destroyEffect(keyleds::effect::interface::Effect * ptr, EffectService & service) override
+    void destroyEffect(keyleds::effect::interface::Effect * ptr, EffectService &) override
     {
-        auto info = stateInfoFor(service.deviceSerial());
+        auto it = std::find_if(m_states.begin(), m_states.end(),
+                               [ptr](const auto & state) { return state.effect.get() == ptr; });
+        assert(it != m_states.end());
 
-        auto it = std::find_if(info->effects.begin(), info->effects.end(),
-                               [ptr](const auto & item) { return item.get() == ptr; });
-        assert(it != info->effects.end());
-
-        std::iter_swap(it, info->effects.end() - 1);
-        info->effects.pop_back();
-
-        if (info->effects.empty()) {
-            std::iter_swap(info, m_states.end() - 1);
-            m_states.pop_back();
-        }
+        std::iter_swap(it, m_states.end() - 1);
+        m_states.pop_back();
     }
 
 
