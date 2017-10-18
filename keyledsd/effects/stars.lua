@@ -66,7 +66,3 @@ function Star:rebirth()
     self.color = config.colors[math.random(#config.colors)]
     self.age = 0
 end
-
--- Start
-
-init()

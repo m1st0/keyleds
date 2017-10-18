@@ -144,7 +144,21 @@ std::unique_ptr<LuaEffect> LuaEffect::create(const std::string & name, EffectSer
     bool ok = handleError(lua, service, lua_pcall(lua, 0, 0, -2)); // pop (errhandler, script)
 
     CHECK_TOP(lua, 0);
-    return ok ? std::make_unique<LuaEffect>(name, service, std::move(state)) : nullptr;
+    if (!ok) { return nullptr; }
+
+    // If script defined an init function, call it now
+    if (pushHook(lua, "init")) {                    // push(init)
+        lua_pushcfunction(lua, errorHandler);       // push(errhandler)
+        lua_insert(lua, -2);                        // swap(init, errhandler) => (errhandler, init)
+        if (!handleError(lua, service,
+                         lua_pcall(lua, 0, 0, -2))) {// pop(errhandler, render)
+            CHECK_TOP(lua, 0);
+            return nullptr;
+        }
+    }
+
+    CHECK_TOP(lua, 0);
+    return std::make_unique<LuaEffect>(name, service, std::move(state));
 }
 
 void LuaEffect::setupState(lua_State * lua, EffectService & service)
