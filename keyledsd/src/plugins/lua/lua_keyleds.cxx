@@ -16,573 +16,22 @@
  */
 #include "plugins/lua/lua_keyleds.h"
 
-#include <lua.hpp>
 #include <cassert>
-#include <cstring>
-#include <iomanip>
+#include <lua.hpp>
 #include <sstream>
-#include "keyledsd/device/RenderLoop.h"
-#include "keyledsd/effect/interfaces.h"
-#include "plugins/lua/LuaEffect.h"
-
-using keyleds::device::KeyDatabase;
-using keyleds::device::RenderTarget;
-using keyleds::effect::interface::EffectService;
-using keyleds::RGBAColor;
-
-namespace keyleds { namespace plugin { namespace lua {
-
-/****************************************************************************/
-
-static const char badKeyErrorMessage[] = "bad key '%s'";
-static const char badTypeErrorMessage[] = "bad type";
-static const char badIndexErrorMessage[] = "index out of bounds '%d'";
-static const char noLongerExistsErrorMessage[] = "object no longer exists";
-static const char noEffectTokenErrorMessage[] = "no effect token in environment";
-
-const void * const effectToken = &effectToken;
-const void * const waitToken = &waitToken;
-
-
-static LuaEffect * getEffect(lua_State * lua)
-{
-    lua_pushlightuserdata(lua, const_cast<void *>(effectToken));   // push(token)
-    lua_rawget(lua, LUA_GLOBALSINDEX);                              // pop(token) push(value)
-    auto * effect = static_cast<LuaEffect *>(const_cast<void *>(lua_topointer(lua, -1)));
-    lua_pop(lua, 1);
-    return effect;
-}
-
-
-template <typename T>
-typename std::enable_if<std::is_same<decltype(std::iterator_traits<T>::value_type::func), lua_CFunction>::value, bool>::type
-handleMethodIndex(lua_State * lua, int index, T begin, T end)
-{
-    if (!lua_isstring(lua, index)) { return false; }
-    const char * name = lua_tostring(lua, index);
-
-    auto it = std::find_if(
-        begin, end,
-        [name](const auto & method) { return std::strcmp(method.name, name) == 0; }
-    );
-    if (it == end) { return false; }
-
-    lua_pushcfunction(lua, it->func);
-    return true;
-}
-
-/****************************************************************************/
-// RGBAColor
-//  - underlying type is a regular table with 4 array values
-//  - we map color names to the matching array entries
-
-static const char * rgbaColorMetatableName = "LRGBAColor";
-
-class LuaRGBAColor final
-{
-    static constexpr std::array<const char *, 4> keys = {{
-        "red", "green", "blue", "alpha"
-    }};
-
-    static int indexForKey(lua_State * lua, const char * key)
-    {
-        for (unsigned idx = 0; idx < keys.size(); ++idx) {
-            if (std::strcmp(keys[idx], key) == 0) {
-                return idx + 1;
-            }
-        }
-        return luaL_error(lua, badKeyErrorMessage, key);
-    }
-
-public:
-    static void push(lua_State * lua, std::array<lua_Number, 4> values)
-    {
-        lua_createtable(lua, 4, 0);
-        luaL_getmetatable(lua, rgbaColorMetatableName);
-        lua_setmetatable(lua, -2);
-        for (int i = 0; i < 4; ++i) {
-            lua_pushnumber(lua, values[i]);
-            lua_rawseti(lua, -2, i + 1);
-        }
-    }
-
-    static int equal(lua_State * lua)
-    {
-        for (int i = 1; i <= 4; ++i) {
-            lua_rawgeti(lua, 1, i);
-            lua_rawgeti(lua, 2, i);
-            if (lua_tonumber(lua, -2) != lua_tonumber(lua, -1)) {
-                lua_pushboolean(lua, false);
-                return 1;
-            }
-            lua_pop(lua, 2);
-        }
-        lua_pushboolean(lua, true);
-        return 1;
-    }
-
-    static int index(lua_State * lua)
-    {
-        lua_rawgeti(lua, 1, indexForKey(lua, luaL_checkstring(lua, 2)));
-        return 1;
-    }
-
-    static int newIndex(lua_State * lua)
-    {
-        lua_rawseti(lua, 1, indexForKey(lua, luaL_checkstring(lua, 2)));
-        return 1;
-    }
-
-    static int toString(lua_State * lua)
-    {
-        std::ostringstream buffer;
-        buffer <<std::fixed <<std::setprecision(3);
-        buffer <<"color(";
-        lua_rawgeti(lua, 1, 1); buffer <<lua_tonumber(lua, -1) <<", ";
-        lua_rawgeti(lua, 1, 2); buffer <<lua_tonumber(lua, -1) <<", ";
-        lua_rawgeti(lua, 1, 3); buffer <<lua_tonumber(lua, -1) <<", ";
-        lua_rawgeti(lua, 1, 4); buffer <<lua_tonumber(lua, -1) <<")";
-        lua_pushstring(lua, buffer.str().c_str());
-        return 1;
-    }
-};
-
-constexpr std::array<const char *, 4> LuaRGBAColor::keys;
-static const struct luaL_Reg rgbaColorMetatableMethods[] = {
-    { "__eq",       LuaRGBAColor::equal },
-    { "__index",    LuaRGBAColor::index },
-    { "__newindex", LuaRGBAColor::newIndex },
-    { "__tostring", LuaRGBAColor::toString },
-    { nullptr,      nullptr}
-};
-
-/****************************************************************************/
-// KeyDatabase
-
-/** class KeyDatabase
- *      string  name
- *      Key operator[](int)
- *      Key findKeyCode(int)
- *      Key findName(string)
- */
-
-class LuaKeyDatabase final
-{
-    static const std::array<struct luaL_Reg, 2> methods;
-
-    static int findKeyCode(lua_State * lua)
-    {
-        const auto * db = lua_check<const KeyDatabase *>(lua, 1);
-
-        auto it = db->findKeyCode(luaL_checkinteger(lua, 2));
-        if (it != db->end()) {
-            lua_push(lua, &*it);
-        } else {
-            lua_pushnil(lua);
-        }
-        return 1;
-    }
-
-    static int findName(lua_State * lua)
-    {
-        const auto * db = lua_check<const KeyDatabase *>(lua, 1);
-
-        auto it = db->findName(luaL_checkstring(lua, 2));
-        if (it != db->end()) {
-            lua_push(lua, &*it);
-        } else {
-            lua_pushnil(lua);
-        }
-        return 1;
-    }
-
-public:
-    static int index(lua_State * lua)
-    {
-        const auto * db = lua_to<const KeyDatabase *>(lua, 1);
-
-        auto idx = lua_tointeger(lua, 2);
-        if (idx != 0) {
-            if (static_cast<size_t>(std::abs(idx)) > db->size()) {
-                return luaL_error(lua, badIndexErrorMessage, idx);
-            }
-            idx = idx > 0 ? idx - 1 : db->size() + idx;
-            lua_push(lua, &(*db)[idx]);
-            return 1;
-        }
-
-        if (handleMethodIndex(lua, 2, methods.begin(), methods.end())) {
-            return 1;
-        }
-
-        lua_getglobal(lua, "tostring");
-        lua_pushvalue(lua, 2);
-        lua_call(lua, 1, 1);
-        return luaL_error(lua, badKeyErrorMessage, lua_tostring(lua, -1));
-    }
-
-    static int len(lua_State * lua)
-    {
-        const auto * db = lua_to<const KeyDatabase *>(lua, 1);
-        lua_pushinteger(lua, db->size());
-        return 1;
-    }
-};
-
-const std::array<struct luaL_Reg, 2> LuaKeyDatabase::methods = {{
-    { "findKeyCode",    LuaKeyDatabase::findKeyCode },
-    { "findName",       LuaKeyDatabase::findName },
-}};
-
-const char * metatable<const device::KeyDatabase *>::name = "LKeyDatabase";
-const struct luaL_Reg metatable<const device::KeyDatabase *>::methods[] = {
-    { "__index",        LuaKeyDatabase::index },
-    { "__len",          LuaKeyDatabase::len },
-    { nullptr,          nullptr}
-};
-
-/****************************************************************************/
-// KeyDatabase::KeyGroup
-
-/** class KeyGroup
- *      Key operator[](int)
- */
-
-class LuaKeyGroup final
-{
-public:
-    static int index(lua_State * lua)
-    {
-        const auto * group = lua_to<const KeyDatabase::KeyGroup *>(lua, 1);
-
-        auto idx = luaL_checkinteger(lua, 2);
-        if (static_cast<size_t>(std::abs(idx)) > group->size()) {
-            return luaL_error(lua, badIndexErrorMessage, idx);
-        }
-        idx = idx > 0 ? idx - 1 : group->size() + idx;
-        lua_push(lua, &(*group)[idx]);
-        return 1;
-    }
-
-    static int len(lua_State * lua)
-    {
-        const auto * group = lua_to<const KeyDatabase::KeyGroup *>(lua, 1);
-        lua_pushinteger(lua, group->size());
-        return 1;
-    }
-
-    static int toString(lua_State * lua)
-    {
-        const auto * keyGroup = lua_to<const KeyDatabase::KeyGroup *>(lua, 1);
-
-        bool isFirst = true;
-        std::ostringstream buffer;
-        buffer <<"[";
-        for (const auto & key : *keyGroup) {
-            if (isFirst) { isFirst = false; }
-                    else { buffer <<", "; }
-            buffer <<key.name;
-        }
-        buffer <<"]";
-        lua_pushstring(lua, buffer.str().c_str());
-        return 1;
-    }
-};
-
-const char * metatable<const KeyDatabase::KeyGroup *>::name = "LKeyGroup";
-const struct luaL_Reg metatable<const KeyDatabase::KeyGroup *>::methods[] = {
-    { "__index",    LuaKeyGroup::index},
-    { "__len",      LuaKeyGroup::len},
-    { "__tostring", LuaKeyGroup::toString },
-    { nullptr,      nullptr}
-};
-
-/****************************************************************************/
-// KeyDatabase::Key
-
-/** class Key
- *      number  index
- *      number  keyCode
- *      string  name
- *      number  x0, y0, x1, y1
- */
-
-class LuaKey final
-{
-public:
-    static int index(lua_State * lua)
-    {
-        const auto * key = lua_to<const KeyDatabase::Key *>(lua, 1);
-        const char * field = luaL_checkstring(lua, 2);
-
-        if (std::strcmp(field, "index") == 0) {
-            lua_pushnumber(lua, key->index);
-        } else if (std::strcmp(field, "keyCode") == 0 ) {
-            lua_pushnumber(lua, key->keyCode);
-        } else if (std::strcmp(field, "name") == 0) {
-            lua_pushlstring(lua, key->name.c_str(), key->name.size());
-        } else if (std::strcmp(field, "x0") == 0) {
-            lua_pushnumber(lua, key->position.x0);
-        } else if (std::strcmp(field, "y0") == 0) {
-            lua_pushnumber(lua, key->position.y0);
-        } else if (std::strcmp(field, "x1") == 0) {
-            lua_pushnumber(lua, key->position.x1);
-        } else if (std::strcmp(field, "y1") == 0) {
-            lua_pushnumber(lua, key->position.y1);
-        } else {
-            return luaL_error(lua, badKeyErrorMessage, field);
-        }
-        return 1;
-    }
-
-    static int toString(lua_State * lua)
-    {
-        const auto * key = lua_to<const KeyDatabase::Key *>(lua, 1);
-        lua_pushfstring(lua, "Key(%d, %d, %s)", key->index, key->keyCode, key->name.c_str());
-        return 1;
-    }
-};
-
-const char * metatable<const KeyDatabase::Key *>::name = "LKey";
-const struct luaL_Reg metatable<const KeyDatabase::Key *>::methods[] = {
-    { "__index",    LuaKey::index},
-    { "__tostring", LuaKey::toString },
-    { nullptr,      nullptr}
-};
-
-/****************************************************************************/
-// RenderTarget
-
-/** class RenderTarget
- *      void blend(const RenderTarget)
- *      color operator[](int)
- */
-
-class LuaRenderTarget final
-{
-    static const std::array<struct luaL_Reg, 1> methods;
-
-    static int toTargetIndex(lua_State * lua, int idx) // 0-based
-    {
-        if (lua_is<const KeyDatabase::Key *>(lua, idx)) {
-            return lua_to<const KeyDatabase::Key *>(lua, idx)->index;
-        }
-        if (lua_isnumber(lua, idx)) {
-            return lua_tointeger(lua, idx) - 1;
-        }
-        if (lua_isstring(lua, idx)) {
-            size_t size;
-            const char * keyName = lua_tolstring(lua, idx, &size);
-            auto * effect = getEffect(lua);
-            if (!effect) { return luaL_error(lua, noEffectTokenErrorMessage); }
-
-            auto it = effect->service().keyDB().findName(std::string(keyName, size));
-            if (it != effect->service().keyDB().end()) {
-                return it->index;
-            }
-            return -1;
-        }
-        return luaL_argerror(lua, idx, badTypeErrorMessage);
-    }
-
-    static int blend(lua_State * lua)
-    {
-        using keyleds::device::blend;
-
-        auto * to = lua_check<RenderTarget *>(lua, 1);
-        if (!to) { return luaL_argerror(lua, 1, noLongerExistsErrorMessage); }
-        auto * from = lua_check<RenderTarget *>(lua, 2);
-        if (!from) { return luaL_argerror(lua, 2, noLongerExistsErrorMessage); }
-
-        blend(*to, *from);
-        return 0;
-    }
-
-public:
-    static int create(lua_State * lua)
-    {
-        auto * effect = getEffect(lua);
-        if (!effect) { return luaL_error(lua, noEffectTokenErrorMessage); }
-
-        auto * target = effect->service().createRenderTarget();
-        for (auto & entry : *target) { entry = RGBAColor(0, 0, 0, 0); }
-
-        lua_push(lua, target);
-        return 1;
-    }
-
-    static int destroy(lua_State * lua)
-    {
-        auto * target = lua_to<RenderTarget *>(lua, 1);
-        if (!target) { return 0; }                  // object marked as gone already
-
-        auto * effect = getEffect(lua);
-        assert(effect);
-
-        effect->service().destroyRenderTarget(target);
-
-        lua_to<RenderTarget *>(lua, 1) = nullptr;   // mark object as gone
-        return 0;
-    }
-
-    static int index(lua_State * lua)
-    {
-        auto * target = lua_to<RenderTarget *>(lua, 1);
-        if (!target) { return luaL_error(lua, noLongerExistsErrorMessage); }
-
-        // Handle method retrieval
-        if (handleMethodIndex(lua, 2, methods.begin(), methods.end())) {
-            return 1;
-        }
-
-        // Handle table-like access
-        int index = toTargetIndex(lua, 2);
-        if (index < 0 || unsigned(index) >= target->size()) {
-            lua_pushnil(lua);
-            return 1;
-        }
-
-        // Extract color data
-        auto & color = (*target)[index];
-
-        LuaRGBAColor::push(lua, {{
-            lua_Number(color.red) / 255.0,
-            lua_Number(color.green) / 255.0,
-            lua_Number(color.blue) / 255.0,
-            lua_Number(color.alpha) / 255.0
-        }});
-        return 1;
-    }
-
-    static int len(lua_State * lua)
-    {
-        auto * target = lua_to<RenderTarget *>(lua, 1);
-        if (!target) { return luaL_error(lua, noLongerExistsErrorMessage); }
-        lua_pushinteger(lua, target->size());
-        return 1;
-    }
-
-    static int newIndex(lua_State * lua)
-    {
-        auto * target = lua_to<RenderTarget *>(lua, 1);
-        if (!target) { return luaL_error(lua, noLongerExistsErrorMessage); }
-
-        int index = toTargetIndex(lua, 2);
-        if (index < 0 || unsigned(index) >= target->size()) {
-            return 0;   /// invalid indices and key names are silently ignored, to allow
-                        /// generic code that works on different keyboards
-        }
-
-        if (!isType(lua, 3, rgbaColorMetatableName)) {
-            return luaL_argerror(lua, 3, badTypeErrorMessage);
-        }
-        lua_rawgeti(lua, 3, 1);
-        lua_rawgeti(lua, 3, 2);
-        lua_rawgeti(lua, 3, 3);
-        lua_rawgeti(lua, 3, 4);
-
-        if (!lua_isnumber(lua, -4) || !lua_isnumber(lua, -3) ||
-            !lua_isnumber(lua, -2) || !lua_isnumber(lua, -1)) {
-            return luaL_argerror(lua, 3, badTypeErrorMessage);
-        }
-
-        (*target)[index] = RGBAColor(
-            std::min(255, int(256.0 * lua_tonumber(lua, -4))),
-            std::min(255, int(256.0 * lua_tonumber(lua, -3))),
-            std::min(255, int(256.0 * lua_tonumber(lua, -2))),
-            std::min(255, int(256.0 * lua_tonumber(lua, -1)))
-        );
-        return 0;
-    }
-};
-
-const std::array<struct luaL_Reg, 1> LuaRenderTarget::methods = {{
-    { "blend",      LuaRenderTarget::blend }
-}};
-
-const char * metatable<RenderTarget *>::name = "LRenderTarget";
-const struct luaL_Reg metatable<RenderTarget *>::methods[] = {
-    { "__gc",       LuaRenderTarget::destroy },
-    { "__index",    LuaRenderTarget::index },
-    { "__len",      LuaRenderTarget::len },
-    { "__newindex", LuaRenderTarget::newIndex },
-    { nullptr,      nullptr}
-};
-
-/****************************************************************************/
-// Animation
-
-class LuaAnimation final
-{
-    static const std::array<struct luaL_Reg, 3> methods;
-
-public:
-    static int create(lua_State * lua)
-    {
-        if (!lua_isfunction(lua, 1)) { return luaL_argerror(lua, 1, badTypeErrorMessage); }
-
-        auto * effect = getEffect(lua);
-        if (!effect) { return luaL_error(lua, noEffectTokenErrorMessage); }
-
-        auto * thread = effect->createAnimation(lua);
-
-        lua_insert(lua, 1);
-        int nargs = lua_gettop(lua) - 2;
-        lua_xmove(lua, thread, nargs + 1);
-
-        effect->runAnimation(lua_to<Animation>(lua, 1), thread, nargs);
-        return 1;
-    }
-
-    static int pause(lua_State * lua)
-    {
-        lua_check<Animation>(lua, 1).running = false;
-        return 0;
-    }
-
-    static int resume(lua_State * lua)
-    {
-        lua_check<Animation>(lua, 1).running = true;
-        return 0;
-    }
-
-    static int stop(lua_State * lua)
-    {
-        auto * effect = getEffect(lua);
-        effect->stopAnimation(lua, lua_check<Animation>(lua, 1));
-        return 0;
-    }
-
-    static int index(lua_State * lua)
-    {
-        if (handleMethodIndex(lua, 2, methods.begin(), methods.end())) { return 1; }
-
-        lua_getglobal(lua, "tostring");
-        lua_pushvalue(lua, 2);
-        lua_call(lua, 1, 1);
-        return luaL_error(lua, badKeyErrorMessage, lua_tostring(lua, -1));
-    }
-};
-
-const std::array<struct luaL_Reg, 3> LuaAnimation::methods = {{
-    { "pause",      LuaAnimation::pause },
-    { "resume",     LuaAnimation::resume },
-    { "stop",       LuaAnimation::stop }
-}};
-
-const char * metatable<Animation>::name = "LAnimation";
-const struct luaL_Reg metatable<Animation>::methods[] = {
-    { "__index",        LuaKeyDatabase::index },
-    { nullptr,          nullptr}
-};
-
-/****************************************************************************/
-
-const struct luaL_Reg keyledsLibrary[] = {
-    { "newAnimation",       LuaAnimation::create },
-    { "newRenderTarget",    LuaRenderTarget::create },
-    { nullptr,              nullptr}
-};
+#include "plugins/lua/lua_Animation.h"
+#include "plugins/lua/lua_Key.h"
+#include "plugins/lua/lua_KeyDatabase.h"
+#include "plugins/lua/lua_KeyGroup.h"
+#include "plugins/lua/lua_RenderTarget.h"
+#include "plugins/lua/lua_RGBAColor.h"
+#include "plugins/lua/lua_common.h"
+#include "plugins/lua/types.h"
+
+
+namespace keyleds { namespace lua {
+
+static const void * controllerToken = &controllerToken;
 
 /****************************************************************************/
 // Global scope
@@ -600,10 +49,10 @@ static int luaPrint(lua_State * lua)        // (...) => ()
         lua_pop(lua, 1);
     }
 
-    auto * effect = getEffect(lua);
-    if (!effect) { return luaL_error(lua, noEffectTokenErrorMessage); }
+    auto * controller = Environment(lua).controller();
+    if (!controller) { return luaL_error(lua, noEffectTokenErrorMessage); }
 
-    effect->print(buffer.str());
+    controller->print(buffer.str());
     return 0;
 }
 
@@ -614,19 +63,14 @@ static int luaToColor(lua_State * lua)      // (any) => (table)
         // We are called as a conversion function
         if (lua_isstring(lua, 1)) {
             // On a string, parse it
-            auto * effect = getEffect(lua);
-            if (!effect) { return luaL_error(lua, noEffectTokenErrorMessage); }
+            auto * controller = Environment(lua).controller();
+            if (!controller) { return luaL_error(lua, noEffectTokenErrorMessage); }
 
             size_t size;
             const char * string = lua_tolstring(lua, 1, &size);
             RGBAColor color;
-            if (effect->service().parseColor(std::string(string, size), &color)) {
-                LuaRGBAColor::push(lua, {{
-                    lua_Number(color.red) / 255.0,
-                    lua_Number(color.green) / 255.0,
-                    lua_Number(color.blue) / 255.0,
-                    lua_Number(color.alpha) / 255.0
-                }});
+            if (controller->parseColor(std::string(string, size), &color)) {
+                lua_push(lua, color);
                 return 1;
             }
         }
@@ -635,7 +79,7 @@ static int luaToColor(lua_State * lua)      // (any) => (table)
         if (lua_isnumber(lua, 1) && lua_isnumber(lua, 2) &&
             lua_isnumber(lua, 3) && lua_isnumber(lua, 4)) {
             lua_createtable(lua, 4, 0);
-            luaL_getmetatable(lua, rgbaColorMetatableName);
+            luaL_getmetatable(lua, metatable<RGBAColor>::name);
             lua_setmetatable(lua, -2);
             lua_insert(lua, 1);
             lua_rawseti(lua, 1, 4);
@@ -660,8 +104,7 @@ static int luaWait(lua_State * lua)
     return lua_yield(lua, 2);
 }
 
-
-static const struct luaL_reg keyledsGlobals[] = {
+static const luaL_reg keyledsGlobals[] = {
     { "print",      luaPrint    },
     { "tocolor",    luaToColor  },
     { "wait",       luaWait     },
@@ -670,33 +113,56 @@ static const struct luaL_reg keyledsGlobals[] = {
 
 /****************************************************************************/
 
-int open_keyleds(lua_State * lua)
+const struct luaL_Reg keyledsLibrary[] = {
+    { "newAnimation",       lua_pushNewAnimation },
+    { "newRenderTarget",    lua_pushNewRenderTarget },
+    { nullptr,              nullptr}
+};
+
+/****************************************************************************/
+
+void Environment::openKeyleds(Controller * controller)
 {
-    // Save service pointer
-    lua_pushlightuserdata(lua, const_cast<void *>(effectToken));
-    lua_pushvalue(lua, 1);
-    lua_rawset(lua, LUA_GLOBALSINDEX);
+    SAVE_TOP(m_lua);
+
+    // Save controller pointer
+    lua_pushlightuserdata(m_lua, const_cast<void *>(controllerToken));
+    lua_pushlightuserdata(m_lua, static_cast<void *>(controller));
+    lua_rawset(m_lua, LUA_GLOBALSINDEX);
 
     // Register types
-    registerType<Animation>(lua);
-    registerType<const KeyDatabase *>(lua);
-    registerType<const KeyDatabase::KeyGroup *>(lua);
-    registerType<const KeyDatabase::Key *>(lua);
-    registerType<RenderTarget *>(lua);
-    registerType(lua, rgbaColorMetatableName, rgbaColorMetatableMethods, false);
+    registerType<Animation>(m_lua);
+    registerType<const device::KeyDatabase *>(m_lua);
+    registerType<const device::KeyDatabase::KeyGroup *>(m_lua);
+    registerType<const device::KeyDatabase::Key *>(m_lua);
+    registerType<device::RenderTarget *>(m_lua);
+    registerType<RGBAColor>(m_lua);
 
     // Register library itself
-    luaL_register(lua, "keyleds", keyledsLibrary);
-    lua_pop(lua, 1);
+    luaL_register(m_lua, "keyleds", keyledsLibrary);
+    lua_pop(m_lua, 1);
 
     // Register globals
-    lua_pushvalue(lua, LUA_GLOBALSINDEX);
-    luaL_register(lua, nullptr, keyledsGlobals);
-    lua_pop(lua, 1);
+    lua_pushvalue(m_lua, LUA_GLOBALSINDEX);
+    luaL_register(m_lua, nullptr, keyledsGlobals);
+    lua_pop(m_lua, 1);
 
-    return 0;
+    CHECK_TOP(m_lua, 0);
+}
+
+Environment::Controller * Environment::controller() const
+{
+    SAVE_TOP(m_lua);
+
+    lua_pushlightuserdata(m_lua, const_cast<void *>(controllerToken));
+    lua_rawget(m_lua, LUA_GLOBALSINDEX);
+    auto * controller = static_cast<Controller *>(const_cast<void *>(lua_topointer(m_lua, -1)));
+    lua_pop(m_lua, 1);
+
+    CHECK_TOP(m_lua, 0);
+    return controller;
 }
 
 /****************************************************************************/
 
-} } } // namespace keyleds::plugin::lua
+} } // namespace keyleds::lua

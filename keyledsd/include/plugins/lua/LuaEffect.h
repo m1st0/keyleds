@@ -19,6 +19,7 @@
 
 #include <memory>
 #include "keyledsd/effect/PluginHelper.h"
+#include "plugins/lua/lua_keyleds.h"
 
 struct lua_State;
 
@@ -29,11 +30,9 @@ namespace std {
 
 namespace keyleds { namespace plugin { namespace lua {
 
-struct Animation;
-
 /****************************************************************************/
 
-class LuaEffect final : public ::plugin::Effect
+class LuaEffect final : public ::plugin::Effect, public keyleds::lua::Environment::Controller
 {
     using state_ptr = std::unique_ptr<lua_State>;
 public:
@@ -41,22 +40,25 @@ public:
                     LuaEffect(const LuaEffect &) = delete;
                     ~LuaEffect();
 
-    // Interface for lua plugin
+    // Factory method
     static std::unique_ptr<LuaEffect> create(const std::string & name, EffectService &,
                                              const std::string & code);
 
-    // Interface for keyleds
+public: // Effect interface for keyleds
     void            render(unsigned long ms, RenderTarget & target) override;
     void            handleContextChange(const string_map &) override;
     void            handleGenericEvent(const string_map &) override;
     void            handleKeyEvent(const KeyDatabase::Key &, bool) override;
 
-    // Interface for lua
-    EffectService & service() { return m_service; }
-    void            print(const std::string &);
-    lua_State *     createAnimation(lua_State * lua);
-    void            runAnimation(Animation &, lua_State * thread, int nargs);
-    void            stopAnimation(lua_State * lua, Animation &);
+public: // Environment::Controller interface for lua
+    void            print(const std::string &) const override;
+    const device::KeyDatabase & keyDB() const override;
+    bool            parseColor(const std::string &, RGBAColor *) const override;
+    RenderTarget *  createRenderTarget() override;
+    void            destroyRenderTarget(RenderTarget *) override;
+    lua_State *     createAnimation(lua_State * lua) override;
+    void            runAnimation(Animation &, lua_State * thread, int nargs) override;
+    void            stopAnimation(lua_State * lua, Animation &) override;
 
 private:
            void     setupState();

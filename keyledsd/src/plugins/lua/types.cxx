@@ -18,18 +18,9 @@
 
 #include <lua.hpp>
 #include <cassert>
+#include "plugins/lua/lua_common.h"
 
-namespace keyleds { namespace plugin { namespace lua {
-
-/****************************************************************************/
-
-#ifndef NDEBUG
-#define SAVE_TOP(lua)           int saved_top_ = lua_gettop(lua)
-#define CHECK_TOP(lua, depth)   assert(lua_gettop(lua) == saved_top_ + depth)
-#else
-#define SAVE_TOP(lua)
-#define CHECK_TOP(lua, depth)
-#endif
+namespace keyleds { namespace lua {
 
 /****************************************************************************/
 
@@ -100,4 +91,4 @@ void lua_pushref(lua_State * lua, const void * value, const char * name, const l
     lua_remove(lua, -2);
 }
 
-} } } // namespace keyleds::plugin::lua
+} } // namespace keyleds::lua

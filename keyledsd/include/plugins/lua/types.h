@@ -21,7 +21,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace keyleds { namespace plugin { namespace lua {
+namespace keyleds { namespace lua {
 
 /****************************************************************************/
 
@@ -82,7 +82,7 @@ lua_push(lua_State * lua, T && value)
 {
     using meta = metatable<typename std::remove_cv<T>::type>;
     void * ptr = lua_newuserdata(lua, sizeof(T));
-    new (ptr) T(std::move(value));
+    new (ptr) T(std::forward<T>(value));
     luaL_getmetatable(lua, meta::name);
     lua_setmetatable(lua, -2);
 }
@@ -98,6 +98,6 @@ lua_push(lua_State * lua, T value)
 
 /****************************************************************************/
 
-} } } // namespace keyleds::plugin::lua
+} } // namespace keyleds::lua
 
 #endif

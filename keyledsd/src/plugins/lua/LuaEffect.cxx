@@ -20,20 +20,17 @@
 #include <cassert>
 #include <cstring>
 #include <sstream>
+#include "plugins/lua/lua_Animation.h"
+#include "plugins/lua/lua_Key.h"
+#include "plugins/lua/lua_KeyDatabase.h"
+#include "plugins/lua/lua_KeyGroup.h"
+#include "plugins/lua/lua_RenderTarget.h"
+#include "plugins/lua/lua_common.h"     //FIXME should not be needed
 #include "plugins/lua/lua_keyleds.h"
 #include "plugins/lua/types.h"
 
 using keyleds::plugin::lua::LuaEffect;
-
-/****************************************************************************/
-
-#ifndef NDEBUG
-#define SAVE_TOP(lua)   int saved_top_ = lua_gettop(lua)
-#define CHECK_TOP(lua, depth)   assert(lua_gettop(lua) == saved_top_ + depth)
-#else
-#define SAVE_TOP(lua)
-#define CHECK_TOP(lua, depth)
-#endif
+using namespace keyleds::lua;
 
 /****************************************************************************/
 // Constants defining LUA environment
@@ -137,9 +134,7 @@ void LuaEffect::setupState()
     }
 
     // Load keyleds library, passing a pointer to ourselves
-    lua_pushcfunction(lua, open_keyleds);
-    lua_pushlightuserdata(lua, this);
-    lua_call(lua, 1, 0);
+    Environment(lua).openKeyleds(this);
 
     // Remove global symbols not in whitelist
     lua_pushnil(lua);
@@ -299,9 +294,29 @@ void LuaEffect::handleKeyEvent(const KeyDatabase::Key & key, bool press)
 /****************************************************************************/
 // Lua interface
 
-void LuaEffect::print(const std::string & msg)
+void LuaEffect::print(const std::string & msg) const
 {
     m_service.log(4, msg.c_str());
+}
+
+const keyleds::device::KeyDatabase & LuaEffect::keyDB() const
+{
+    return m_service.keyDB();
+}
+
+bool LuaEffect::parseColor(const std::string & str, RGBAColor * color) const
+{
+    return m_service.parseColor(str, color);
+}
+
+keyleds::device::RenderTarget * LuaEffect::createRenderTarget()
+{
+    return m_service.createRenderTarget();
+}
+
+void LuaEffect::destroyRenderTarget(RenderTarget * target)
+{
+    m_service.destroyRenderTarget(target);
 }
 
 /// pushes the animation onto the stack
