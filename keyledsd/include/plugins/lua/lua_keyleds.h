@@ -29,6 +29,13 @@ namespace keyleds { namespace plugin { namespace lua {
 
 /****************************************************************************/
 
+struct Animation
+{
+    int         id;
+    bool        running;
+    unsigned    sleepTime;
+};
+
 template <> struct metatable<const device::KeyDatabase *>
     { static const char * name; static const struct luaL_reg methods[]; struct weak_table : std::false_type{}; };
 template <> struct metatable<const device::KeyDatabase::KeyGroup *>
@@ -37,8 +44,10 @@ template <> struct metatable<const device::KeyDatabase::Key *>
     { static const char * name; static const struct luaL_reg methods[]; struct weak_table : std::true_type{}; };
 template <> struct metatable<device::RenderTarget *>
     { static const char * name; static const struct luaL_reg methods[]; struct weak_table : std::false_type{}; };
+template <> struct metatable<Animation>
+    { static const char * name; static const struct luaL_reg methods[]; struct weak_table : std::false_type{}; };
 
-extern const void * const serviceToken; ///< lightuserdata indexing EffectService in globals
+extern const void * const waitToken;
 
 int open_keyleds(lua_State *);
 

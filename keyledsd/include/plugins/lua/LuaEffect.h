@@ -29,6 +29,8 @@ namespace std {
 
 namespace keyleds { namespace plugin { namespace lua {
 
+struct Animation;
+
 /****************************************************************************/
 
 class LuaEffect final : public ::plugin::Effect
@@ -39,15 +41,26 @@ public:
                     LuaEffect(const LuaEffect &) = delete;
                     ~LuaEffect();
 
+    // Interface for lua plugin
     static std::unique_ptr<LuaEffect> create(const std::string & name, EffectService &,
                                              const std::string & code);
 
+    // Interface for keyleds
     void            render(unsigned long ms, RenderTarget & target) override;
     void            handleContextChange(const string_map &) override;
     void            handleGenericEvent(const string_map &) override;
     void            handleKeyEvent(const KeyDatabase::Key &, bool) override;
+
+    // Interface for lua
+    EffectService & service() { return m_service; }
+    void            print(const std::string &);
+    lua_State *     createAnimation(lua_State * lua);
+    void            runAnimation(Animation &, lua_State * thread, int nargs);
+    void            stopAnimation(lua_State * lua, Animation &);
+
 private:
-    static void     setupState(lua_State *, EffectService &);
+           void     setupState();
+           void     stepAnimations(unsigned ms);
     static bool     pushHook(lua_State *, const char *);
     static bool     handleError(lua_State *, EffectService &, int code);
 private:

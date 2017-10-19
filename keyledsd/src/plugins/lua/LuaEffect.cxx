@@ -39,15 +39,14 @@ using keyleds::plugin::lua::LuaEffect;
 // Constants defining LUA environment
 
 // LUA libraries to load
-static constexpr std::array<lua_CFunction, 5> loadModules = {{
+static constexpr std::array<lua_CFunction, 4> loadModules = {{
     luaopen_base, luaopen_math, luaopen_string, luaopen_table,
-    keyleds::plugin::lua::open_keyleds
 }};
-static_assert(loadModules.back() == keyleds::plugin::lua::open_keyleds,
+static_assert(loadModules.back() == luaopen_table,
               "unexpected last element, is size correct?");
 
 // Symbols not in this list get removed once libraries are loaded
-static constexpr std::array<const char *, 26> globalWhitelist = {{
+static constexpr std::array<const char *, 27> globalWhitelist = {{
     // Libraries
     "coroutine", "keyleds", "math", "string",
     "table",
@@ -56,55 +55,18 @@ static constexpr std::array<const char *, 26> globalWhitelist = {{
     "next", "pairs", "pcall", "print",
     "rawequal", "rawget", "rawset", "select",
     "setmetatable", "tocolor", "tonumber", "tostring",
-    "type", "unpack", "xpcall",
+    "type", "unpack", "wait", "xpcall",
     // Values
     "_G", "_VERSION"
 }};
 
+static const void * const animationToken = &animationToken;
+
 /****************************************************************************/
 // Helper functions
 
-// Ensure unique_ptr works on lua_State
-namespace std {
-    void default_delete<lua_State>::operator()(lua_State *p) const { lua_close(p); }
-}
-
-/// Convert a lua panic into abort - gives better messages than letting lua exit().
-static int luaPanicHandler(lua_State *) { abort(); }
-
-/// Builds the error message for script errors
-static int errorHandler(lua_State * lua)
-{
-    std::ostringstream buffer;
-    lua_Debug   data;
-
-    buffer <<"Error: " <<lua_tostring(lua, -1);
-    for (int level = 0; lua_getstack(lua, level, &data) != 0; ++level)
-    {
-        lua_getinfo(lua, "Snl", &data);
-        buffer <<"\n    ";
-        if (std::strcmp(data.what, "Lua") == 0) {
-            if (data.name) {
-                buffer <<"In " <<data.namewhat <<" '" <<data.name <<"'";
-            } else {
-                buffer <<"In anonymous " <<data.namewhat;
-            }
-        } else if (std::strcmp(data.what, "C") == 0) {
-            buffer <<"In call";
-            if (data.name) { buffer <<" '" <<data.name <<"'"; }
-        } else if (std::strcmp(data.what, "main") == 0) {
-            buffer <<"In global scope";
-        } else if (std::strcmp(data.what, "tail") == 0) {
-            buffer <<"In <tail call>";
-        }
-        if (data.currentline >= 0) {
-            buffer <<", line " <<data.currentline;
-        }
-    }
-    std::string result = buffer.str();
-    lua_pushlstring(lua, result.c_str(), result.size());
-    return 1;
-}
+static int luaPanicHandler(lua_State *);
+static int luaErrorHandler(lua_State *);
 
 /****************************************************************************/
 // Lifecycle management
@@ -136,10 +98,12 @@ std::unique_ptr<LuaEffect> LuaEffect::create(const std::string & name, EffectSer
         return nullptr;
     }                                       // ^push (script)
 
-    setupState(lua, service);
+    auto effect = std::make_unique<LuaEffect>(name, service, std::move(state));
+
+    effect->setupState();
 
     // Run script to let it build its environment
-    lua_pushcfunction(lua, errorHandler);   // push (errhandler)
+    lua_pushcfunction(lua, luaErrorHandler);// push (errhandler)
     lua_insert(lua, -2);                    // swap (script, errhandler) => (errhandler, script)
     bool ok = handleError(lua, service, lua_pcall(lua, 0, 0, -2)); // pop (errhandler, script)
 
@@ -148,7 +112,7 @@ std::unique_ptr<LuaEffect> LuaEffect::create(const std::string & name, EffectSer
 
     // If script defined an init function, call it now
     if (pushHook(lua, "init")) {                    // push(init)
-        lua_pushcfunction(lua, errorHandler);       // push(errhandler)
+        lua_pushcfunction(lua, luaErrorHandler);    // push(errhandler)
         lua_insert(lua, -2);                        // swap(init, errhandler) => (errhandler, init)
         if (!handleError(lua, service,
                          lua_pcall(lua, 0, 0, -2))) {// pop(errhandler, render)
@@ -158,11 +122,12 @@ std::unique_ptr<LuaEffect> LuaEffect::create(const std::string & name, EffectSer
     }
 
     CHECK_TOP(lua, 0);
-    return std::make_unique<LuaEffect>(name, service, std::move(state));
+    return effect;
 }
 
-void LuaEffect::setupState(lua_State * lua, EffectService & service)
+void LuaEffect::setupState()
 {
+    auto lua = m_state.get();
     SAVE_TOP(lua);
 
     // Load libraries in default environment
@@ -170,6 +135,11 @@ void LuaEffect::setupState(lua_State * lua, EffectService & service)
         lua_pushcfunction(lua, module);
         lua_call(lua, 0, 0);
     }
+
+    // Load keyleds library, passing a pointer to ourselves
+    lua_pushcfunction(lua, open_keyleds);
+    lua_pushlightuserdata(lua, this);
+    lua_call(lua, 1, 0);
 
     // Remove global symbols not in whitelist
     lua_pushnil(lua);
@@ -187,27 +157,27 @@ void LuaEffect::setupState(lua_State * lua, EffectService & service)
     }
 
     // Add debug module if configuration requests it
-    if (service.getConfig("debug") == "yes") {
+    if (m_service.getConfig("debug") == "yes") {
         lua_pushcfunction(lua, luaopen_debug);
         lua_call(lua, 0, 0);
     }
 
-    // Save service pointer
-    lua_pushlightuserdata(lua, const_cast<void *>(serviceToken));
-    lua_pushlightuserdata(lua, &service);
-    lua_rawset(lua, LUA_GLOBALSINDEX);
+    // Insert animation list
+    lua_pushlightuserdata(lua, const_cast<void *>(animationToken));
+    lua_newtable(lua);
+    lua_rawset(lua, LUA_REGISTRYINDEX);
 
     // Set keyleds members
     lua_getglobal(lua, "keyleds");
     {
-        lua_pushlstring(lua, service.deviceName().data(), service.deviceName().size());
+        lua_pushlstring(lua, m_service.deviceName().data(), m_service.deviceName().size());
         lua_setfield(lua, -2, "deviceName");
-        lua_pushlstring(lua, service.deviceModel().data(), service.deviceModel().size());
+        lua_pushlstring(lua, m_service.deviceModel().data(), m_service.deviceModel().size());
         lua_setfield(lua, -2, "deviceModel");
-        lua_pushlstring(lua, service.deviceSerial().data(), service.deviceSerial().size());
+        lua_pushlstring(lua, m_service.deviceSerial().data(), m_service.deviceSerial().size());
         lua_setfield(lua, -2, "deviceSerial");
 
-        auto & config = service.configuration();
+        auto & config = m_service.configuration();
         lua_createtable(lua, 0, config.size());
         for (const auto & item : config) {
             lua_pushlstring(lua, item.first.data(), item.first.size());
@@ -216,7 +186,7 @@ void LuaEffect::setupState(lua_State * lua, EffectService & service)
         }
         lua_setfield(lua, -2, "config");
 
-        auto & groups = service.keyGroups();
+        auto & groups = m_service.keyGroups();
         lua_createtable(lua, 0, groups.size());
         for (const auto & group : groups) {
             lua_pushlstring(lua, group.name().data(), group.name().size());
@@ -225,7 +195,7 @@ void LuaEffect::setupState(lua_State * lua, EffectService & service)
         }
         lua_setfield(lua, -2, "groups");
 
-        lua_push(lua, &service.keyDB());
+        lua_push(lua, &m_service.keyDB());
         lua_setfield(lua, -2, "db");
     }
     lua_pop(lua, 1);        // pop(keyleds)
@@ -240,10 +210,13 @@ void LuaEffect::render(unsigned long ms, RenderTarget & target)
 {
     if (!m_enabled) { return; }
     auto lua = m_state.get();
+
+    stepAnimations(ms);
+
     SAVE_TOP(lua);
     lua_push(lua, &target);                         // push(rendertarget)
 
-    lua_pushcfunction(lua, errorHandler);           // push(errhandler)
+    lua_pushcfunction(lua, luaErrorHandler);        // push(errhandler)
     if (pushHook(lua, "render")) {                  // push(render)
         lua_pushinteger(lua, ms);                   // push(arg1)
         lua_pushvalue(lua, -4);                     // push(arg2)
@@ -265,7 +238,7 @@ void LuaEffect::handleContextChange(const string_map & data)
     if (!m_enabled) { return; }
     auto lua = m_state.get();
     SAVE_TOP(lua);
-    lua_pushcfunction(lua, errorHandler);           // push(errhandler)
+    lua_pushcfunction(lua, luaErrorHandler);        // push(errhandler)
     if (pushHook(lua, "onContextChange")) {         // push(hook)
         lua_createtable(lua, 0, data.size());       // push table
         for (const auto & item : data) {
@@ -287,7 +260,7 @@ void LuaEffect::handleGenericEvent(const string_map & data)
     if (!m_enabled) { return; }
     auto lua = m_state.get();
     SAVE_TOP(lua);
-    lua_pushcfunction(lua, errorHandler);           // push(errhandler)
+    lua_pushcfunction(lua, luaErrorHandler);        // push(errhandler)
     if (pushHook(lua, "onGenericEvent")) {          // push(hook)
         lua_createtable(lua, 0, data.size());       // push table
         for (const auto & item : data) {
@@ -309,7 +282,7 @@ void LuaEffect::handleKeyEvent(const KeyDatabase::Key & key, bool press)
     if (!m_enabled) { return; }
     auto lua = m_state.get();
     SAVE_TOP(lua);
-    lua_pushcfunction(lua, errorHandler);           // push(errhandler)
+    lua_pushcfunction(lua, luaErrorHandler);        // push(errhandler)
     if (pushHook(lua, "onKeyEvent")) {              // push(hook)
         lua_push(lua, &key);                        // push(arg1)
         lua_pushboolean(lua, press);                // push(arg2)
@@ -321,6 +294,114 @@ void LuaEffect::handleKeyEvent(const KeyDatabase::Key & key, bool press)
         lua_pop(lua, 1);                            // pop(errhandler)
     }
     CHECK_TOP(lua, 0);
+}
+
+/****************************************************************************/
+// Lua interface
+
+void LuaEffect::print(const std::string & msg)
+{
+    m_service.log(4, msg.c_str());
+}
+
+/// pushes the animation onto the stack
+lua_State * LuaEffect::createAnimation(lua_State * lua)
+{
+    lua_push(lua, Animation{0, true, 0});           // push(animation)
+
+    lua_createtable(lua, 0, 1);                     // push(fenv)
+    auto * thread = lua_newthread(m_state.get());   // push(thread)
+    lua_setfield(lua, -2, "thread");                // pop(thread)
+    lua_setfenv(lua, -2);                           // pop(fenv)
+
+    lua_pushlightuserdata(lua, const_cast<void *>(animationToken)); // push(token)
+    lua_rawget(lua, LUA_REGISTRYINDEX);             // pop(token) push(animlist)
+    lua_pushvalue(lua, -2);                         // push(anim)
+    auto id = luaL_ref(lua, -2);                    // pop(anim)
+    lua_to<Animation>(lua, -2).id = id;
+    lua_pop(lua, 1);                                // pop(animlist)
+
+    return thread;
+}
+
+void LuaEffect::stopAnimation(lua_State * lua, Animation & animation)
+{
+    lua_pushlightuserdata(lua, const_cast<void *>(animationToken));
+    lua_rawget(lua, LUA_REGISTRYINDEX);
+
+    luaL_unref(lua, -1, animation.id);
+    lua_pop(lua, 1);
+}
+
+void LuaEffect::stepAnimations(unsigned ms)
+{
+    auto * lua = m_state.get();
+    lua_pushlightuserdata(lua, const_cast<void *>(animationToken));
+    lua_rawget(lua, LUA_REGISTRYINDEX);
+
+    size_t size = lua_objlen(lua, -1);
+    for (size_t index = 1; index <= size; ++index) {
+        lua_rawgeti(lua, -1, index);                    // push(animation)
+        if (!lua_is<Animation>(lua, -1)) {
+            lua_pop(lua, 1);                            // (pop(animation))
+            continue;
+        }
+
+        auto & animation = lua_to<Animation>(lua, -1);
+
+        if (animation.running) {
+            if (animation.sleepTime <= ms) {
+                lua_getfenv(lua, -1);                   // push(fenv)
+                lua_getfield(lua, -1, "thread");        // push(thread)
+
+                auto * thread = static_cast<lua_State *>(const_cast<void *>(lua_topointer(lua, -1)));
+                runAnimation(animation, thread, 0);
+
+                lua_pop(lua, 2);                        // pop(fenv, thread)
+            }
+            if (animation.sleepTime > ms) {
+                animation.sleepTime -= ms;
+            } else {
+                animation.sleepTime = 0;
+            }
+        }
+        lua_pop(lua, 1);                                // pop(animation)
+    }
+    lua_pop(lua, 1);                                    // pop(animlist)
+}
+
+void LuaEffect::runAnimation(Animation & animation, lua_State * thread, int nargs)
+{
+    auto * lua = m_state.get();
+
+    bool terminate = true;
+    switch (lua_resume(thread, nargs)) {
+        case 0:
+            break;
+        case LUA_YIELD:
+            if (lua_topointer(thread, 1) != const_cast<void *>(waitToken)) {
+                luaL_traceback(lua, thread, "invalid yield", 0);
+                m_service.log(1, lua_tostring(lua, -1));
+                lua_pop(lua, 1);
+                break;
+            }
+            animation.sleepTime += int(1000.0 * lua_tonumber(thread, 2));
+            terminate = false;
+            break;
+        case LUA_ERRRUN:
+            luaL_traceback(lua, thread, lua_tostring(thread, -1), 0);
+            m_service.log(1, lua_tostring(lua, -1));
+            lua_pop(lua, 1);
+            break;
+        case LUA_ERRMEM:
+            m_service.log(1, "out of memory");
+            break;
+        default:
+            m_service.log(1, "unexpected error");
+    }
+    if (terminate) {
+        stopAnimation(m_state.get(), animation);
+    }
 }
 
 /****************************************************************************/
@@ -355,9 +436,26 @@ bool LuaEffect::handleError(lua_State * lua, EffectService & service, int code)
         service.log(1, "out of memory");
         break;
     case LUA_ERRERR:
-    default:
         service.log(0, "unexpected error");
+        break;
     }
     lua_pop(lua, 1);        // pop error handler
     return ok;
+}
+
+// Ensure unique_ptr works on lua_State
+namespace std {
+    void default_delete<lua_State>::operator()(lua_State *p) const { lua_close(p); }
+}
+
+/****************************************************************************/
+
+/// Convert a lua panic into abort - gives better messages than letting lua exit().
+static int luaPanicHandler(lua_State *) { abort(); }
+
+/// Builds the error message for script errors
+static int luaErrorHandler(lua_State * lua)
+{
+    luaL_traceback(lua, lua, lua_tostring(lua, -1), 1);
+    return 1;
 }
