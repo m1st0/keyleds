@@ -23,8 +23,6 @@ namespace keyleds { namespace lua {
 
 /****************************************************************************/
 
-const void * const waitToken = &waitToken;
-
 const char * const badKeyErrorMessage = "bad key '%s'";
 const char * const badTypeErrorMessage = "bad type";
 const char * const badIndexErrorMessage = "index out of bounds '%d'";

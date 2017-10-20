@@ -24,9 +24,6 @@ namespace keyleds { namespace lua {
 
 /****************************************************************************/
 
-extern const void * const effectToken;
-extern const void * const waitToken;
-
 extern const char * const badKeyErrorMessage;
 extern const char * const badTypeErrorMessage;
 extern const char * const badIndexErrorMessage;

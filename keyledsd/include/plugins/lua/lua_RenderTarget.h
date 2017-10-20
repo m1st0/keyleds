@@ -17,7 +17,7 @@
 #ifndef KEYLEDS_PLUGINS_LUA_LUA_RENDERTARGET_H_96E3ECF7
 #define KEYLEDS_PLUGINS_LUA_LUA_RENDERTARGET_H_96E3ECF7
 
-#include "plugins/lua/types.h"
+#include "plugins/lua/lua_types.h"
 
 namespace keyleds { namespace device { class RenderTarget; } }
 
@@ -26,9 +26,8 @@ namespace keyleds { namespace lua {
 /****************************************************************************/
 
 template <> struct metatable<device::RenderTarget *>
-    { static const char * name; static const struct luaL_reg methods[]; struct weak_table : std::false_type{}; };
-
-int lua_pushNewRenderTarget(lua_State * lua);
+    { static const char * name; static const struct luaL_Reg methods[];
+      static const struct luaL_Reg meta_methods[]; struct weak_table : std::false_type{}; };
 
 /****************************************************************************/
 

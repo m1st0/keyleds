@@ -14,7 +14,7 @@ transparent = tocolor(0, 0, 0, 0)
 
 function init()
     keyStates = {}                      -- this will hold one boolean per key: on/off
-    buffer = keyleds.newRenderTarget()  -- this will hold key colors
+    buffer = RenderTarget:new()  -- this will hold key colors
 end
 
 -- Effect rendering, called by keyleds several times per second to update leds

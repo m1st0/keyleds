@@ -14,7 +14,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#include "plugins/lua/types.h"
+#include "plugins/lua/lua_types.h"
 
 #include <lua.hpp>
 #include <cassert>
@@ -24,15 +24,16 @@ namespace keyleds { namespace lua {
 
 /****************************************************************************/
 
-void registerType(lua_State * lua, const char * name, const luaL_reg * methods, bool weakTable)
+void detail::registerType(lua_State * lua, const char * name,
+                          const luaL_reg * methods, const luaL_reg * metaMethods, bool weakTable)
 {
     assert(lua);
     assert(name);
-    assert(methods);
+    assert(metaMethods);
 
     SAVE_TOP(lua);
     luaL_newmetatable(lua, name);
-    luaL_register(lua, nullptr, methods);
+    luaL_register(lua, nullptr, metaMethods);
 
     // metatable["__metatable"] = nil   -- makes metatable invisible to lua
     lua_pushnil(lua);
@@ -41,8 +42,14 @@ void registerType(lua_State * lua, const char * name, const luaL_reg * methods, 
     lua_pop(lua, 1);
     CHECK_TOP(lua, 0);
 
+    if (methods) {
+        luaL_register(lua, name, methods);
+        lua_pop(lua, 1);
+        CHECK_TOP(lua, 0);
+    }
+
     if (weakTable) {
-        lua_pushlightuserdata(lua, const_cast<luaL_Reg *>(methods));
+        lua_pushlightuserdata(lua, const_cast<luaL_Reg *>(metaMethods));
         lua_newtable(lua);              // push(weaktable)
         lua_createtable(lua, 0, 1);     // push(metatable)
         lua_pushliteral(lua, "v");      // push("v")
@@ -53,7 +60,7 @@ void registerType(lua_State * lua, const char * name, const luaL_reg * methods, 
     }
 }
 
-bool isType(lua_State * lua, int index, const char * name)
+bool detail::isType(lua_State * lua, int index, const char * name)
 {
     assert(lua);
     assert(name);
@@ -68,8 +75,9 @@ bool isType(lua_State * lua, int index, const char * name)
     return result;
 }
 
-void lua_pushref(lua_State * lua, const void * value, const char * name, const luaL_reg * metaMethods)
+void detail::lua_pushref(lua_State * lua, const void * value, const char * name, const luaL_reg * metaMethods)
 {
+    SAVE_TOP(lua);
     lua_pushlightuserdata(lua, const_cast<luaL_reg *>(metaMethods));
     lua_rawget(lua, LUA_REGISTRYINDEX);
     lua_pushlightuserdata(lua, const_cast<void *>(value));
@@ -89,6 +97,7 @@ void lua_pushref(lua_State * lua, const void * value, const char * name, const l
         lua_rawset(lua, -4);
     }
     lua_remove(lua, -2);
+    CHECK_TOP(lua, +1);
 }
 
 } } // namespace keyleds::lua

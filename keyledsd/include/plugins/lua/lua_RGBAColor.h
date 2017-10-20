@@ -17,7 +17,7 @@
 #ifndef KEYLEDS_PLUGINS_LUA_LUA_RGBACOLOR_H_5373E7AA
 #define KEYLEDS_PLUGINS_LUA_LUA_RGBACOLOR_H_5373E7AA
 
-#include "plugins/lua/types.h"
+#include "plugins/lua/lua_types.h"
 
 namespace keyleds { struct RGBAColor; }
 
@@ -26,7 +26,8 @@ namespace keyleds { namespace lua {
 /****************************************************************************/
 
 template <> struct metatable<keyleds::RGBAColor>
-    { static const char * name; static const struct luaL_reg methods[]; struct weak_table : std::false_type{}; };
+    { static const char * name; static constexpr struct luaL_Reg * methods = nullptr;
+      static const struct luaL_Reg meta_methods[]; struct weak_table : std::false_type{}; };
 
 void lua_push(lua_State * lua, keyleds::RGBAColor);
 

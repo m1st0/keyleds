@@ -27,9 +27,15 @@ namespace keyleds { namespace lua {
 
 template <typename T> struct metatable {};
 
-void registerType(lua_State *, const char * name, const luaL_reg * metaMethods, bool weakTable);
-bool isType(lua_State * lua, int index, const char * type);
-void lua_pushref(lua_State * lua, const void * value, const char * name, const luaL_reg * metaMethods);
+namespace detail {
+    void registerType(lua_State *, const char * name, const luaL_Reg * methods,
+                      const luaL_Reg * metaMethods, bool weakTable);
+    bool isType(lua_State * lua, int index, const char * type);
+    void lua_pushref(lua_State * lua, const void * value, const char * name,
+                     const luaL_Reg * metaMethods);
+}
+
+/****************************************************************************/
 
 /// Registers the metatable with lua
 template <typename T> void registerType(lua_State * lua)
@@ -37,14 +43,14 @@ template <typename T> void registerType(lua_State * lua)
     using meta = metatable<typename std::remove_cv<T>::type>;
     static_assert(std::is_pointer<T>::value || !meta::weak_table::value,
                   "Using a weak table requires stored object to be a pointer");
-    registerType(lua, meta::name, meta::methods, meta::weak_table::value);
+    detail::registerType(lua, meta::name, meta::methods, meta::meta_methods, meta::weak_table::value);
 }
 
 /// Tests whether value at index is of specified type
 template <typename T> bool lua_is(lua_State * lua, int index)
 {
     using meta = metatable<typename std::remove_cv<T>::type>;
-    return isType(lua, index, meta::name);
+    return detail::isType(lua, index, meta::name);
 }
 
 /// Returns a reference to userdata object of a type, checking type beforehand
@@ -93,7 +99,7 @@ typename std::enable_if<metatable<typename std::remove_cv<T>::type>::weak_table:
 lua_push(lua_State * lua, T value)
 {
     using meta = metatable<typename std::remove_cv<T>::type>;
-    lua_pushref(lua, static_cast<const void *>(value), meta::name, meta::methods);
+    detail::lua_pushref(lua, static_cast<const void *>(value), meta::name, meta::meta_methods);
 }
 
 /****************************************************************************/

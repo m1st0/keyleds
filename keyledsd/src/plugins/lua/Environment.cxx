@@ -14,24 +14,17 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#include "plugins/lua/lua_keyleds.h"
+#include "plugins/lua/Environment.h"
 
 #include <cassert>
 #include <lua.hpp>
 #include <sstream>
-#include "plugins/lua/lua_Animation.h"
-#include "plugins/lua/lua_Key.h"
-#include "plugins/lua/lua_KeyDatabase.h"
-#include "plugins/lua/lua_KeyGroup.h"
-#include "plugins/lua/lua_RenderTarget.h"
-#include "plugins/lua/lua_RGBAColor.h"
 #include "plugins/lua/lua_common.h"
-#include "plugins/lua/types.h"
 
 
 namespace keyleds { namespace lua {
 
-static const void * controllerToken = &controllerToken;
+static const void * const controllerToken = &controllerToken;
 
 /****************************************************************************/
 // Global scope
@@ -99,7 +92,7 @@ static int luaWait(lua_State * lua)
     if (!lua_isnumber(lua, 1)) {
         return luaL_argerror(lua, 1, "Duration must be a number");
     }
-    lua_pushlightuserdata(lua, const_cast<void *>(waitToken));
+    lua_pushlightuserdata(lua, const_cast<void *>(Environment::waitToken));
     lua_pushvalue(lua, 1);
     return lua_yield(lua, 2);
 }
@@ -113,13 +106,7 @@ static const luaL_reg keyledsGlobals[] = {
 
 /****************************************************************************/
 
-const struct luaL_Reg keyledsLibrary[] = {
-    { "newAnimation",       lua_pushNewAnimation },
-    { "newRenderTarget",    lua_pushNewRenderTarget },
-    { nullptr,              nullptr}
-};
-
-/****************************************************************************/
+const void * const Environment::waitToken = &Environment::waitToken;
 
 void Environment::openKeyleds(Controller * controller)
 {
@@ -131,16 +118,12 @@ void Environment::openKeyleds(Controller * controller)
     lua_rawset(m_lua, LUA_GLOBALSINDEX);
 
     // Register types
-    registerType<Animation>(m_lua);
     registerType<const device::KeyDatabase *>(m_lua);
     registerType<const device::KeyDatabase::KeyGroup *>(m_lua);
     registerType<const device::KeyDatabase::Key *>(m_lua);
     registerType<device::RenderTarget *>(m_lua);
     registerType<RGBAColor>(m_lua);
-
-    // Register library itself
-    luaL_register(m_lua, "keyleds", keyledsLibrary);
-    lua_pop(m_lua, 1);
+    registerType<Thread>(m_lua);
 
     // Register globals
     lua_pushvalue(m_lua, LUA_GLOBALSINDEX);

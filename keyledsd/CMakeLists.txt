@@ -175,16 +175,16 @@ pkg_search_module(LUA luajit lua-5.3 lua-5.2 lua-5.1)
 
 IF(LUA_FOUND)
     add_library(fx_lua MODULE
+        src/plugins/lua/Environment.cxx
         src/plugins/lua/LuaEffect.cxx
-        src/plugins/lua/lua_Animation.cxx
         src/plugins/lua/lua_Key.cxx
         src/plugins/lua/lua_KeyDatabase.cxx
         src/plugins/lua/lua_KeyGroup.cxx
         src/plugins/lua/lua_RGBAColor.cxx
         src/plugins/lua/lua_RenderTarget.cxx
+        src/plugins/lua/lua_Thread.cxx
         src/plugins/lua/lua_common.cxx
-        src/plugins/lua/lua_keyleds.cxx
-        src/plugins/lua/types.cxx
+        src/plugins/lua/lua_types.cxx
         src/plugins/lua.cxx
     )
     target_compile_options(fx_lua PRIVATE ${LUA_CFLAGS_OTHER})

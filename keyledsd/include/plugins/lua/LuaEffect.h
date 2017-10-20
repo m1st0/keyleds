@@ -19,7 +19,7 @@
 
 #include <memory>
 #include "keyledsd/effect/PluginHelper.h"
-#include "plugins/lua/lua_keyleds.h"
+#include "plugins/lua/Environment.h"
 
 struct lua_State;
 
@@ -44,7 +44,8 @@ public:
     static std::unique_ptr<LuaEffect> create(const std::string & name, EffectService &,
                                              const std::string & code);
 
-public: // Effect interface for keyleds
+public: // Effect interface for keyleds & lua init hook
+    void            init();
     void            render(unsigned long ms, RenderTarget & target) override;
     void            handleContextChange(const string_map &) override;
     void            handleGenericEvent(const string_map &) override;
@@ -52,17 +53,16 @@ public: // Effect interface for keyleds
 
 public: // Environment::Controller interface for lua
     void            print(const std::string &) const override;
-    const device::KeyDatabase & keyDB() const override;
     bool            parseColor(const std::string &, RGBAColor *) const override;
     RenderTarget *  createRenderTarget() override;
     void            destroyRenderTarget(RenderTarget *) override;
-    lua_State *     createAnimation(lua_State * lua) override;
-    void            runAnimation(Animation &, lua_State * thread, int nargs) override;
-    void            stopAnimation(lua_State * lua, Animation &) override;
+    int             createThread(lua_State * lua, int nargs) override;
+    void            destroyThread(lua_State * lua, Thread &) override;
 
 private:
            void     setupState();
-           void     stepAnimations(unsigned ms);
+           void     stepThreads(unsigned ms);
+           void     runThread(Thread &, lua_State * thread, int nargs);
     static bool     pushHook(lua_State *, const char *);
     static bool     handleError(lua_State *, EffectService &, int code);
 private:

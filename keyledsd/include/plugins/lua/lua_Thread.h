@@ -14,26 +14,25 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#ifndef KEYLEDS_PLUGINS_LUA_LUA_ANIMATION_H_761E3512
-#define KEYLEDS_PLUGINS_LUA_LUA_ANIMATION_H_761E3512
+#ifndef KEYLEDS_PLUGINS_LUA_LUA_THREAD_H_761E3512
+#define KEYLEDS_PLUGINS_LUA_LUA_THREAD_H_761E3512
 
-#include "plugins/lua/types.h"
+#include "plugins/lua/lua_types.h"
 
 namespace keyleds { namespace lua {
 
 /****************************************************************************/
 
-struct Animation
+struct Thread
 {
     int         id;
     bool        running;
     unsigned    sleepTime;
 };
 
-template <> struct metatable<Animation>
-    { static const char * name; static const struct luaL_reg methods[]; struct weak_table : std::false_type{}; };
-
-int lua_pushNewAnimation(lua_State * lua);
+template <> struct metatable<Thread>
+    { static const char * name; static const struct luaL_Reg methods[];
+      static const struct luaL_Reg meta_methods[]; struct weak_table : std::false_type{}; };
 
 /****************************************************************************/
 

@@ -102,7 +102,7 @@ void lua_push(lua_State * lua, RGBAColor value)
 /****************************************************************************/
 
 const char * metatable<RGBAColor>::name = "LRGBAColor";
-const struct luaL_Reg metatable<RGBAColor>::methods[] = {
+const struct luaL_Reg metatable<RGBAColor>::meta_methods[] = {
     { "__eq",       equal },
     { "__index",    index },
     { "__newindex", newIndex },

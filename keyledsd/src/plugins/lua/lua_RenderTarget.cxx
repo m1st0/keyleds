@@ -19,10 +19,8 @@
 #include <cassert>
 #include <lua.hpp>
 #include "keyledsd/device/KeyDatabase.h"
-#include "plugins/lua/lua_Key.h"
-#include "plugins/lua/lua_RGBAColor.h"
+#include "plugins/lua/Environment.h"
 #include "plugins/lua/lua_common.h"
-#include "plugins/lua/lua_keyleds.h"
 
 using keyleds::device::KeyDatabase;
 using keyleds::device::RenderTarget;
@@ -42,17 +40,26 @@ static int toTargetIndex(lua_State * lua, int idx) // 0-based
     if (lua_isstring(lua, idx)) {
         size_t size;
         const char * keyName = lua_tolstring(lua, idx, &size);
-        auto * controller = Environment(lua).controller();
-        if (!controller) { return luaL_error(lua, noEffectTokenErrorMessage); }
 
-        auto it = controller->keyDB().findName(std::string(keyName, size));
-        if (it != controller->keyDB().end()) {
+        lua_getglobal(lua, "keyleds");
+        lua_getfield(lua, -1, "db");
+        if (!lua_is<const KeyDatabase *>(lua, -1)) {
+            return luaL_error(lua, "keyleds.db is not a valid database");
+        }
+
+        auto * db = lua_to<const KeyDatabase *>(lua, -1);
+        lua_pop(lua, 2);
+
+        auto it = db->findName(std::string(keyName, size));
+        if (it != db->end()) {
             return it->index;
         }
         return -1;
     }
     return luaL_argerror(lua, idx, badTypeErrorMessage);
 }
+
+/****************************************************************************/
 
 static int blend(lua_State * lua)
 {
@@ -67,10 +74,20 @@ static int blend(lua_State * lua)
     return 0;
 }
 
-static const luaL_Reg methods[] = {
-    { "blend",      blend },
-    { nullptr,      nullptr }
-};
+
+static int create(lua_State * lua)
+{
+    auto * controller = Environment(lua).controller();
+    if (!controller) { return luaL_error(lua, noEffectTokenErrorMessage); }
+
+    auto * target = controller->createRenderTarget();
+    for (auto & entry : *target) { entry = RGBAColor(0, 0, 0, 0); }
+
+    lua_push(lua, target);
+    return 1;
+}
+
+/****************************************************************************/
 
 static int destroy(lua_State * lua)
 {
@@ -92,7 +109,7 @@ static int index(lua_State * lua)
     if (!target) { return luaL_error(lua, noLongerExistsErrorMessage); }
 
     // Handle method retrieval
-    if (lua_handleMethodIndex(lua, 2, methods)) { return 1; }
+    if (lua_handleMethodIndex(lua, 2, metatable<RenderTarget *>::methods)) { return 1; }
 
     // Handle table-like access
     int index = toTargetIndex(lua, 2);
@@ -149,22 +166,13 @@ static int newIndex(lua_State * lua)
 
 /****************************************************************************/
 
-int lua_pushNewRenderTarget(lua_State * lua)
-{
-    auto * controller = Environment(lua).controller();
-    if (!controller) { return luaL_error(lua, noEffectTokenErrorMessage); }
-
-    auto * target = controller->createRenderTarget();
-    for (auto & entry : *target) { entry = RGBAColor(0, 0, 0, 0); }
-
-    lua_push(lua, target);
-    return 1;
-}
-
-/****************************************************************************/
-
-const char * metatable<RenderTarget *>::name = "LRenderTarget";
+const char * metatable<RenderTarget *>::name = "RenderTarget";
 const struct luaL_Reg metatable<RenderTarget *>::methods[] = {
+    { "blend",      blend },
+    { "new",        create },
+    { nullptr,      nullptr }
+};
+const struct luaL_Reg metatable<RenderTarget *>::meta_methods[] = {
     { "__gc",       destroy },
     { "__index",    index },
     { "__len",      len },

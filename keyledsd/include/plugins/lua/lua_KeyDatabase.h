@@ -18,14 +18,15 @@
 #define KEYLEDS_PLUGINS_LUA_LUA_KEYDATABASE_H_F65596BE
 
 #include "keyledsd/device/KeyDatabase.h"
-#include "plugins/lua/types.h"
+#include "plugins/lua/lua_types.h"
 
 namespace keyleds { namespace lua {
 
 /****************************************************************************/
 
 template <> struct metatable<const device::KeyDatabase *>
-    { static const char * name; static const struct luaL_reg methods[]; struct weak_table : std::false_type{}; };
+    { static const char * name; static constexpr struct luaL_Reg * methods = nullptr;
+      static const struct luaL_Reg meta_methods[]; struct weak_table : std::false_type{}; };
 
 /****************************************************************************/
 

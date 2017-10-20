@@ -18,17 +18,20 @@
 #define KEYLEDS_PLUGINS_LUA_LUA_KEYLEDS_H_3EAF7EA0
 
 #include <string>
+#include "plugins/lua/lua_Key.h"
+#include "plugins/lua/lua_KeyDatabase.h"
+#include "plugins/lua/lua_KeyGroup.h"
+#include "plugins/lua/lua_RGBAColor.h"
+#include "plugins/lua/lua_RenderTarget.h"
+#include "plugins/lua/lua_Thread.h"
 
 struct lua_State;
-namespace keyleds { namespace device {
-    class KeyDatabase;
-    class RenderTarget;
-} }
+namespace keyleds { namespace device { class RenderTarget; } }
 namespace keyleds { struct RGBAColor; }
 
 namespace keyleds { namespace lua {
 
-struct Animation;
+struct Thread;
 
 /****************************************************************************/
 
@@ -39,18 +42,16 @@ public:
     class Controller
     {
     protected:
-        using Animation = keyleds::lua::Animation;
+        using Thread = keyleds::lua::Thread;
     public:
         virtual void            print(const std::string &) const = 0;
-        virtual const device::KeyDatabase & keyDB() const = 0;
         virtual bool            parseColor(const std::string &, RGBAColor *) const = 0;
 
         virtual device::RenderTarget *  createRenderTarget() = 0;
         virtual void            destroyRenderTarget(device::RenderTarget *) = 0;
 
-        virtual lua_State *     createAnimation(lua_State * lua) = 0;
-        virtual void            runAnimation(Animation &, lua_State * thread, int nargs) = 0;
-        virtual void            stopAnimation(lua_State * lua, Animation &) = 0;
+        virtual int             createThread(lua_State * lua, int nargs) = 0;
+        virtual void            destroyThread(lua_State * lua, Thread &) = 0;
     protected:
         ~Controller() {}
     };
@@ -60,6 +61,8 @@ public:
 
     void            openKeyleds(Controller *);
     Controller *    controller() const;
+
+    static const void * const waitToken;
 private:
     lua_State *     m_lua;
 };

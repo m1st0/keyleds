@@ -30,7 +30,7 @@ function init()
         stars[#stars + 1] = star
     end
 
-    buffer = keyleds.newRenderTarget()
+    buffer = RenderTarget:new()
 end
 
 -- Effect rendering
